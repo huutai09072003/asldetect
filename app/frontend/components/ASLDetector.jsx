@@ -1,72 +1,65 @@
-// app/frontend/components/ASLDetector.jsx
+import React, { useEffect, useRef, useState } from "react"
 
-import React, { useRef, useEffect, useState } from "react"
-
-const ASLDetector = () => {
+const ASLStream = () => {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
-  const [prediction, setPrediction] = useState("")
+  const wsRef = useRef(null)
+  const [streamImg, setStreamImg] = useState(null)
 
-  // Bật webcam
   useEffect(() => {
-    const startCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-        }
-      } catch (err) {
-        console.error("Lỗi mở camera:", err)
-      }
+    // Mở webcam
+    navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+      if (videoRef.current) videoRef.current.srcObject = stream
+    })
+
+    // Kết nối WebSocket
+    const ws = new WebSocket("ws://localhost:8000/ws/stream")
+    wsRef.current = ws
+
+    ws.onmessage = (event) => {
+      setStreamImg(`data:image/jpeg;base64,${event.data}`)
     }
 
-    startCamera()
+    return () => ws.close()
   }, [])
 
-  // Chụp hình và gọi API mỗi 2 giây
+  // Gửi ảnh định kỳ
   useEffect(() => {
-    const interval = setInterval(async () => {
-      if (!videoRef.current || !canvasRef.current) return
-
+    const interval = setInterval(() => {
       const video = videoRef.current
       const canvas = canvasRef.current
+      const ws = wsRef.current
+
+      if (!video || !canvas || !ws || ws.readyState !== 1) return
+
       const ctx = canvas.getContext("2d")
-
-      // Vẽ frame từ video vào canvas
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      const imageBlob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg"))
 
-      // Gửi ảnh lên API
-      const formData = new FormData()
-      formData.append("image", imageBlob, "frame.jpg")
-
-      try {
-        const res = await fetch("http://localhost:8000/predict", {
-          method: "POST",
-          body: formData
-        })
-
-        if (res.ok) {
-          const result = await res.json()
-          setPrediction(result?.label || "Không rõ")
-        } else {
-          console.warn("API lỗi:", res.status)
+      canvas.toBlob((blob) => {
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          const base64 = reader.result.split(",")[1]
+          ws.send(base64)
         }
-      } catch (err) {
-        console.error("Không gọi được API:", err)
-      }
-    }, 2000)
+        reader.readAsDataURL(blob)
+      }, "image/jpeg")
+    }, 150) // ~6-7 FPS
 
     return () => clearInterval(interval)
   }, [])
 
   return (
-    <div className="space-y-4">
-      <video ref={videoRef} autoPlay playsInline width="400" height="300" className="rounded shadow" />
-      <canvas ref={canvasRef} width="400" height="300" style={{ display: "none" }} />
-      <div className="text-xl font-bold">Kết quả dự đoán: <span className="text-blue-600">{prediction}</span></div>
+    <div className="space-y-4 text-center">
+      <h2 className="text-2xl font-bold">🧠 Nhận diện ASL Realtime (YOLOv11)</h2>
+
+      <video ref={videoRef} autoPlay playsInline width="320" height="240" className="rounded shadow" />
+      <canvas ref={canvasRef} width="320" height="240" style={{ display: "none" }} />
+
+      {streamImg && (
+        <img src={streamImg} alt="ASL result" className="rounded border shadow mx-auto" width="320" height="240" />
+      )}
     </div>
   )
 }
 
-export default ASLDetector
+export default ASLStream
